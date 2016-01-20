@@ -4,7 +4,7 @@
 #include <Arduino.h>
 
 // How many NeoPixels are attached to the Arduino?
-static const unsigned int kNumPixels = 150;
+static const unsigned int kNumPixels = 4;
 
 typedef uint8_t ColourComponent;
 typedef uint8_t Brightness;

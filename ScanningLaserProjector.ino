@@ -42,6 +42,9 @@ void setup()
 	pinMode( SLOWER_PIN, INPUT_PULLUP );
 	pinMode( FAN_INPUT_PIN, INPUT_PULLUP);
 
+	pinMode( LED_PIN, OUTPUT );
+	pinMode( LASER_PIN, OUTPUT );
+
 	attachInterrupt( digitalPinToInterrupt(FAN_INPUT_PIN), fanInterrupt, RISING);
 
 	// Startup the app
@@ -52,8 +55,8 @@ void loop()
 {
 	// Read the buttons
 	InputState inputState;
-	inputState.m_fasterButton = (digitalRead( FASTER_PIN ) == LOW);
-	inputState.m_slowerButton = (digitalRead( SLOWER_PIN ) == LOW);
+	inputState.m_redButton = (digitalRead( FASTER_PIN ) == LOW);
+	inputState.m_blueButton = (digitalRead( SLOWER_PIN ) == LOW);
 	inputState.m_measuredRevsPerSecond = revsPerSecond;
 	inputState.m_mostRecentSyncTime = mostRecentSyncTime;
 
