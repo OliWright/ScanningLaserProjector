@@ -9,6 +9,9 @@ typedef volatile uint8_t  Reg8;
 typedef volatile uint16_t Reg16;
 typedef volatile void     RegVoid;
 
+ClockState clockStates[2];
+uint8_t clockStateBufferIdx = 0;
+
 // Contains const information about a hardware timer, like available prescalers.
 class TimerInfo
 {
@@ -48,17 +51,30 @@ class TimerState
 {
 public:
 	TimerState()
-	: m_numInterrupts( 0 ), m_handler( nullptr )
+	: m_numInterrupts( 0 ), m_handler( nullptr ), m_interval( 0 )
 	{}
 
-	void SetInterruptHandler( InterruptHandler handler, uint16_t numInterrupts = 0 )
+	void SetInterruptHandler( InterruptHandler handler, MicroSeconds interval, uint16_t numInterrupts = 0 )
 	{
 		m_numInterrupts = numInterrupts;
 		m_handler = handler;
+		m_interval = interval;
+		m_expectedInterruptTime = micros() + interval;
 	}
 
 	inline void Interrupt()
 	{
+		MicroSeconds now = micros();
+		MicroSeconds diff = now - m_expectedInterruptTime;
+		if( abs(diff) > 100 )
+		{
+			// The interrupt has happened much earlier than anticipated.
+			// Serial.print( TCNT1 );
+			// Serial.print( ", ");
+			// Serial.println( diff );
+			return;
+		}
+		m_expectedInterruptTime = now + m_interval;
 		if( m_handler )
 		{
 			m_handler();
@@ -75,13 +91,15 @@ public:
 private:
 	uint16_t         m_numInterrupts;
 	InterruptHandler m_handler;
+	MicroSeconds     m_interval;
+	MicroSeconds     m_expectedInterruptTime;
 };
 
 static TimerState timerStates[3];
 
-ISR(TIMER0_COMPA_vect) { timerStates[0].Interrupt(); }
+//ISR(TIMER0_COMPA_vect) { timerStates[0].Interrupt(); }
 ISR(TIMER1_COMPA_vect) { timerStates[1].Interrupt(); }
-ISR(TIMER2_COMPA_vect) { timerStates[2].Interrupt(); }
+//ISR(TIMER2_COMPA_vect) { timerStates[2].Interrupt(); }
 
 void SetTimerInterrupt( uint8_t timerIdx, MicroSeconds interval, InterruptHandler handler, uint16_t numInterrupts )
 {
@@ -116,15 +134,16 @@ void SetTimerInterrupt( uint8_t timerIdx, MicroSeconds interval, InterruptHandle
 	const Prescaler& prescaler = timerInfo.GetPrescaler( prescalerIdx );
 	uint8_t clockSelect = prescaler.m_clockSelectBits;
 
-	Serial.println( 1 << prescaler.m_bitShift );
-	Serial.println( prescaler.m_clockSelectBits );
-	Serial.println( countTarget );
-	Serial.println( ((unsigned long) countTarget) * (1 << prescaler.m_bitShift) );
-	cli();
-	timerStates[ timerIdx ].SetInterruptHandler( handler, numInterrupts );
+	//Serial.println( 1 << prescaler.m_bitShift );
+	//Serial.println( prescaler.m_clockSelectBits );
+	 //Serial.println( countTarget );
+	//Serial.println( ((unsigned long) countTarget) * (1 << prescaler.m_bitShift) );
+	//cli();
+	timerStates[ timerIdx ].SetInterruptHandler( handler, interval, numInterrupts );
 	// Poke the registers
 	if( timerIdx == 0 )
 	{
+		Serial.println( "AAAAAGGHGGHHHH");
 		TCCR0A = 0;
 		TCCR0B = 0;
 		TCNT0 = 0;
@@ -135,8 +154,9 @@ void SetTimerInterrupt( uint8_t timerIdx, MicroSeconds interval, InterruptHandle
 	}
 	else if( timerIdx == 1)
 	{
+		TIMSK1 &= ~(1 << OCIE1A);
 		TCCR1A = 0;
-		TCCR1B = 0;
+		//TCCR1B = 0;
 		TCNT1 = 0;
 		OCR1A = countTarget;
 		TCCR1B = prescaler.m_clockSelectBits | (1 << WGM12);
@@ -144,6 +164,7 @@ void SetTimerInterrupt( uint8_t timerIdx, MicroSeconds interval, InterruptHandle
 	}
 	else
 	{
+		Serial.println( "AAAAAGGHGGHHHH");
 		TCCR2A = 0;
 		TCCR2B = 0;
 		TCNT2 = 0;
@@ -152,5 +173,37 @@ void SetTimerInterrupt( uint8_t timerIdx, MicroSeconds interval, InterruptHandle
 		TCCR2A = (1 << WGM21);
 		TIMSK2 |= (1 << OCIE2A);
 	}
-	sei();
+	//sei();
+}
+
+void ConfigureTimer1ForClock()
+{
+	// 16-bit with prescaler of 8
+	// Counter resolution is 0.5us
+	TIMSK1 &= ~(1 << OCIE1A);
+	TCCR1A = 0;
+	//TCCR1B = 0;
+	TCNT1 = 0;
+	OCR1A = 0xffff;
+	TCCR1B = (1 << CS11);// | (1 << WGM12);
+	//TIMSK1 |= (1 << OCIE1A);
+}
+
+void ConfigureTimer2ForPWM( uint8_t dutyCycle )
+{
+	TIMSK2 &= ~(1 << OCIE2A);
+	TCCR2A = 0;
+	TCCR2B = 0;
+	TCNT2 = 0;
+	OCR2A = 80; // Wrap at 80.  25KHz
+	OCR2B = dutyCycle; // Pin 3
+	TCCR2B = (1<<CS20); // Prescaler of 8.  2MHz
+	TCCR2A = 0x23;
+}
+
+void DisableAllTimerInterrupts()
+{
+	TIMSK0 &= ~(1 << OCIE0A);
+	TIMSK1 &= ~(1 << OCIE1A);
+	TIMSK2 &= ~(1 << OCIE2A);
 }
