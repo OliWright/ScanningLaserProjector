@@ -11,22 +11,16 @@ static const uint8_t  kNumMirrors = 16; // The number of mirrors in the drum.
 static const uint8_t  kHeight = kNumMirrors * kNumLasers;
 static const uint8_t  kWidthBytes = 128 >> 3;
 static const uint16_t kLaserByteOffset = kNumMirrors * kWidthBytes;
-static const uint16_t kNumDrumRevolutionHistoryEntriesLog2 = 3; // Set to 0 to disable rotation history smoothing
-static const uint16_t kNumDrumRevolutionHistoryEntries = (1 << kNumDrumRevolutionHistoryEntriesLog2);
 static const Ticks kDrift = 4;
 
 // Mirror drum
 static Ticks previousDrumSyncTime = 0;
-static Ticks previousSmoothedDrumSyncTime = 0;
 volatile static Ticks actualSyncTime = 0;
 volatile static uint8_t drumSyncTimePosted = 0;
-static uint8_t drumRevolutionDurationHistoryEntry = 0;
-static Ticks drumRevolutionDurationHistory[ kNumDrumRevolutionHistoryEntries ] = {0};
 static Ticks previousDrumRevolutionDurationTicks = 0;
 static uint8_t revsPerSecond = 0;
 static uint16_t firstMirrorOffset = 1936; // Fraction of drum revolution * 4096
 
-//static uint8_t mirrorToRaster[] = {0, 14, 7, 12, 2, 9, 5, 11, 1, 15, 6, 13, 3, 8, 4, 10 };
 static uint8_t mirrorToRaster[] = {0, 14, 7, 12, 2, 9, 5, 11, 1, 15, 6, 13, 3, 8, 4, 10 };
 
 uint8_t currentMirrorIdx = 0;
@@ -478,78 +472,8 @@ void calcNextRevolutionSettings( bool expectData )
 		}
 		previousDrumRevolutionDurationTicks = drumRevolutionDurationTicks;
 
-		// Smooth the drumRevolutionDuration
-		Ticks smoothedDrumRevolutionDurationTicks = 0;
-		for( uint8_t i = 0; i < kNumDrumRevolutionHistoryEntries; ++i )
-		{
-			smoothedDrumRevolutionDurationTicks += drumRevolutionDurationHistory[ i ];
-		}
-		smoothedDrumRevolutionDurationTicks >>= kNumDrumRevolutionHistoryEntriesLog2;
-		bool thisSampleIsGood = false;
-		if( !getIsSynchronised() || (abs( smoothedDrumRevolutionDurationTicks - drumRevolutionDurationTicks ) < 1000) )
-		{
-			drumRevolutionDurationHistory[ drumRevolutionDurationHistoryEntry ] = drumRevolutionDurationTicks;
-			drumRevolutionDurationHistoryEntry = (drumRevolutionDurationHistoryEntry + 1) & (kNumDrumRevolutionHistoryEntries - 1);
-			//thisSampleIsGood = true;
-		}
-
-		Ticks smoothedSyncTime = previousSmoothedDrumSyncTime + smoothedDrumRevolutionDurationTicks;
-		Ticks smoothedSyncTimeDelta = (smoothedSyncTime - actualSyncTime);
-		if( thisSampleIsGood )
-		{
-			if( abs( smoothedSyncTimeDelta ) > 6000 )
-			{
-				// Sync time is a long way away from the real one
-				setIsNotSynchronised();
-				if( !getIsSynchronised() )
-				{
-					Serial.println( "Lost sync" );
-					expectData = false; //< So we get some spam
-
-					smoothedSyncTime = actualSyncTime;
-					smoothedSyncTimeDelta = 0;
-
-					// Fill our history data with the current rotation time
-					smoothedDrumRevolutionDurationTicks = (drumRevolutionDurationTicks + previousDrumRevolutionDurationTicks) >> 1;
-					for( uint8_t i = 0; i < kNumDrumRevolutionHistoryEntries; ++i )
-					{
-						drumRevolutionDurationHistory[ i ] = smoothedDrumRevolutionDurationTicks;
-					}
-				}
-			}
-			else
-			{
-				setIsSynchronised();
-			}
-
-			int16_t driftStep = getIsSynchronised() ? 32 : 64;
-
-			if( smoothedSyncTimeDelta < 0 )
-			{
-				smoothedSyncTime += driftStep;
-				if( smoothedSyncTime > actualSyncTime )
-				{
-					smoothedSyncTime = actualSyncTime;
-				}
-			}
-			else if( smoothedSyncTimeDelta > 0 )
-			{
-				smoothedSyncTime -= driftStep;
-				if( smoothedSyncTime < actualSyncTime )
-				{
-					smoothedSyncTime = actualSyncTime;
-				}
-			}
-		}
-
-		previousSmoothedDrumSyncTime = smoothedSyncTime;
-
-		MicroSeconds smoothedDrumRevolutionDurationUS = smoothedDrumRevolutionDurationTicks >> 1;
-		//Ticks delayToFirstMirror = (smoothedDrumRevolutionDurationTicks * (unsigned long) firstMirrorOffset) >> 12;
-		//nextRevolutionStartTime = smoothedSyncTime + delayToFirstMirror;
 		Ticks delayToFirstMirror = (drumRevolutionDurationTicks * (unsigned long) firstMirrorOffset) >> 12;
 		nextRevolutionStartTime = actualSyncTime + delayToFirstMirror;
-		//nextRevolutionStartTime = smoothedSyncTime + smoothedDrumRevolutionDurationTicks + (delayToFirstMirror << 1);
 		if( nextRevolutionStartTime < GetClockMain() )
 		{
 			Serial.println("V");
@@ -557,7 +481,7 @@ void calcNextRevolutionSettings( bool expectData )
 
 		// Calculate desired horizontal scan time, and from that
 		// the inter-bit and inter-byte delays
-		hScanInterval = TicksToMicroSeconds(smoothedDrumRevolutionDurationTicks) / kNumMirrors;
+		hScanInterval = TicksToMicroSeconds(drumRevolutionDurationTicks) / kNumMirrors;
 		hScanDuration = (hScanInterval * 2) >> 2; // We'll draw for 1/2 of the hScanDuration
 		calcHorizontalScanDelays();
 
@@ -574,15 +498,9 @@ void calcNextRevolutionSettings( bool expectData )
 			Serial.println( now );
 			Serial.print( "M0: " );
 			Serial.println( nextRevolutionStartTime - now );
-			Serial.print( "SS: " );
-			Serial.println( smoothedSyncTime );
-			Serial.print( "LS: " );
+			Serial.print( "T: " );
 			Serial.println( actualSyncTime );
 			Serial.print( "D: " );
-			Serial.println( smoothedSyncTimeDelta );
-			Serial.print( "SD: " );
-			Serial.println( smoothedDrumRevolutionDurationTicks );
-			Serial.print( "LD: " );
 			Serial.println( drumRevolutionDurationTicks );
 		}
 #endif
